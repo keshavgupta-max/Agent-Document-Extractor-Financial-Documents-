@@ -1,0 +1,14 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.6.0
+pydantic_settings>=2.2.0
+python-dotenv>=1.0.1
+PyMuPDF>=1.23.0
+python-docx>=1.1.0
+openpyxl>=3.1.2
+Pillow>=10.2.0
+google-genai>=0.1.0
+chromadb>=0.4.24
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+python-multipart

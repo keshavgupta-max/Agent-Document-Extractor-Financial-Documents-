@@ -113,3 +113,24 @@ models/*.safetensors
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Runtime / generated data
+data/staging/*
+data/storage/documents/*
+data/chroma/*
+data/logs/*
+data/temp/*
+
+# Keep required directories in Git
+!data/staging/.gitkeep
+!data/storage/documents/.gitkeep
+!data/chroma/.gitkeep
+!data/logs/.gitkeep
+!data/temp/.gitkeep
+
+# Python / test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/

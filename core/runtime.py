@@ -25,16 +25,32 @@ from tools.embedding_prep.models import EmbeddingPrepInput
 from tools.extractor.models import ExtractorInput
 from tools.parser.models import ParserInput
 from tools.query.models import QueryInput
+from tools.upload.constants import ALLOWED_MIME_TYPES
 from tools.upload.models import UploadInput
 from tools.validator.models import ValidationInput
 from tools.vector_storage.models import VectorStorageInput
+
+# Derive canonical extension-to-MIME mapping from project constants
+EXTENSION_TO_CANONICAL_MIME = {
+    ext: mime_type
+    for mime_type, exts in ALLOWED_MIME_TYPES.items()
+    for ext in exts
+}
+
+# Canonical staging root for incoming un-ingested source files
+CANONICAL_STAGING_ROOT = Path("data/staging")
 
 
 class AgentRuntime:
     """Core pipeline execution engine responsible for orchestrating tool dependency chains."""
 
-    def __init__(self, registry: Optional[ToolRegistry] = None) -> None:
+    def __init__(
+        self,
+        registry: Optional[ToolRegistry] = None,
+        staging_root: Optional[Path] = None,
+    ) -> None:
         self._registry = registry or ToolRegistry()
+        self._staging_root = Path(staging_root) if staging_root else CANONICAL_STAGING_ROOT
 
     async def execute_tool(
         self,
@@ -104,10 +120,32 @@ class AgentRuntime:
             # Stage 1: Upload Document
             # ==============================================================
 
-            input_path = Path(payload.file_path)
+            # Enforce strict path containment within the approved staging root
+            allowed_staging_root = self._staging_root.resolve()
 
-            # Production path: the requested file must actually exist.
-            # No dummy bytes or hardcoded PDF fallback is used.
+            input_path = Path(payload.file_path)
+            resolved_input_path = input_path.resolve()
+
+            try:
+                is_inside_staging = resolved_input_path.is_relative_to(allowed_staging_root)
+            except (ValueError, AttributeError):
+                is_inside_staging = False
+
+            if not is_inside_staging:
+                logger.warning(
+                    "Security violation: Requested source file_path '%s' is outside approved staging boundary '%s'.",
+                    payload.file_path,
+                    allowed_staging_root,
+                )
+                return self._build_failure_result(
+                    ExecutionMode.DOCUMENT_INGESTION,
+                    workspace_id,
+                    stages,
+                    start_time,
+                    document_id,
+                    "upload_document",
+                )
+
             if not input_path.exists():
                 return self._build_failure_result(
                     ExecutionMode.DOCUMENT_INGESTION,
@@ -130,10 +168,9 @@ class AgentRuntime:
 
             file_bytes = input_path.read_bytes()
 
-            mime_type, _ = mimetypes.guess_type(input_path.name)
-            mime_type = mime_type or "application/octet-stream"
-
             file_extension = input_path.suffix.lower()
+            mime_type = EXTENSION_TO_CANONICAL_MIME.get(file_extension) or mimetypes.guess_type(input_path.name)[0]
+            mime_type = mime_type or "application/octet-stream"
 
             upload_input = UploadInput(
                 filename=payload.original_filename,
@@ -168,7 +205,7 @@ class AgentRuntime:
 
             document_id = data_dict.get("document_id")
 
-            # The upload/storage layer must provide the canonical stored path.
+            # Canonical storage path is provided by UploadTool after persisting
             file_path = data_dict.get("storage_path")
 
             if not file_path:
@@ -181,7 +218,6 @@ class AgentRuntime:
                     "upload_document",
                 )
 
-            # Use the actual stored file's metadata when available.
             mime_type = data_dict.get("mime_type") or mime_type
             file_extension = (
                 data_dict.get("file_extension")
@@ -260,7 +296,6 @@ class AgentRuntime:
                     None,
                 )
 
-            # Do not silently assume every document is an invoice.
             if not doc_type:
                 return self._build_failure_result(
                     ExecutionMode.DOCUMENT_INGESTION,
@@ -319,7 +354,6 @@ class AgentRuntime:
                     "validate_document",
                 )
 
-            # Determine validation status.
             val_data = (
                 validator_res.data
                 if isinstance(validator_res.data, dict)
@@ -485,7 +519,6 @@ class AgentRuntime:
             )
 
         except Exception as exc:
-            # Log the real exception internally for debugging.
             logger.error(
                 "Unhandled runtime exception during ingestion: %s",
                 str(exc),
@@ -502,7 +535,6 @@ class AgentRuntime:
                 time.perf_counter() - start_time
             ) * 1000.0
 
-            # Never expose raw exception details to API clients.
             return PipelineExecutionResult(
                 success=False,
                 mode=ExecutionMode.DOCUMENT_INGESTION,

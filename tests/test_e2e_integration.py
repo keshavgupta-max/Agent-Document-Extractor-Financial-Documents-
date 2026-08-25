@@ -1,10 +1,6 @@
-"""Phase 17 Agent 1 End-to-End Integration Tests.
+"""Phase 17 Agent 1 End-to-End Integration Tests."""
 
-Verifies:
-API -> AgentRuntime -> ToolRegistry -> Pipeline Tools
--> PipelineExecutionResult -> API Response.
-"""
-
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,7 +16,6 @@ from core.tool_result import ToolResult
 
 def _create_mock_stage_data(name: str):
     """Generate valid mock data matching existing pipeline models."""
-
     if name == "upload_document":
         return {
             "document_id": "doc_e2e_101",
@@ -30,7 +25,6 @@ def _create_mock_stage_data(name: str):
             "workspace_id": "ws_enterprise",
             "status": "SUCCESS",
         }
-
     if name == "parse_document":
         return {
             "document_id": "doc_e2e_101",
@@ -38,24 +32,17 @@ def _create_mock_stage_data(name: str):
             "file_extension": ".pdf",
             "mime_type": "application/pdf",
             "page_count": 1,
-            "pages": [
-                {
-                    "page_number": 1,
-                    "text": "Contract terms and conditions.",
-                }
-            ],
+            "pages": [{"page_number": 1, "text": "Contract terms and conditions."}],
             "tables": [],
             "metadata": {},
             "parsing_status": "SUCCESS",
         }
-
     if name == "classify_document":
         return {
             "document_id": "doc_e2e_101",
             "document_type": "CONTRACT",
             "confidence_score": 0.99,
         }
-
     if name == "extract_structured_data":
         return {
             "document_id": "doc_e2e_101",
@@ -74,7 +61,6 @@ def _create_mock_stage_data(name: str):
                 "processing_time_ms": 0.0,
             },
         }
-
     if name == "validate_document":
         return {
             "document_id": "doc_e2e_101",
@@ -86,7 +72,6 @@ def _create_mock_stage_data(name: str):
             "warning_count": 0,
             "processing_time_ms": 0.0,
         }
-
     if name == "prepare_embedding_content":
         return {
             "document_id": "doc_e2e_101",
@@ -103,7 +88,6 @@ def _create_mock_stage_data(name: str):
                 "processing_time_ms": 0.0,
             },
         }
-
     if name == "generate_embeddings":
         return {
             "document_id": "doc_e2e_101",
@@ -120,20 +104,17 @@ def _create_mock_stage_data(name: str):
                 "processing_time_ms": 10.0,
             },
         }
-
     if name == "store_vectors":
         return {
             "document_id": "doc_e2e_101",
             "workspace_id": "ws_enterprise",
             "status": "INDEXED",
         }
-
     if name == "query_documents":
         return {
             "answer": "The contract total value is $10,000 with Acme Corp.",
             "source_chunks": [],
         }
-
     return {
         "document_id": "doc_e2e_101",
         "workspace_id": "ws_enterprise",
@@ -144,7 +125,6 @@ def _create_mock_stage_data(name: str):
 @pytest.fixture
 def mock_pipeline_tool_registry():
     """Create a mocked registry without instantiating real tools."""
-
     registry = MagicMock()
 
     def get_tool(name: str):
@@ -164,11 +144,11 @@ def mock_pipeline_tool_registry():
 
 
 @pytest.fixture
-def e2e_client(mock_pipeline_tool_registry):
-    """Create FastAPI client using AgentRuntime with mocked tools."""
-
+def e2e_client(mock_pipeline_tool_registry, tmp_path):
+    """Create FastAPI client using AgentRuntime configured with tmp_path staging root."""
     runtime = AgentRuntime(
-        registry=mock_pipeline_tool_registry
+        registry=mock_pipeline_tool_registry,
+        staging_root=tmp_path,
     )
 
     app = FastAPI()
@@ -176,16 +156,11 @@ def e2e_client(mock_pipeline_tool_registry):
     app.include_router(query_router)
 
     app.dependency_overrides[get_runtime] = lambda: runtime
-
     return TestClient(app)
 
 
-def test_e2e_full_ingestion_pipeline_success(
-    e2e_client,
-    tmp_path,
-):
+def test_e2e_full_ingestion_pipeline_success(e2e_client, tmp_path):
     """Verify API request flows through all 8 ingestion stages."""
-
     sample_file = tmp_path / "sample_contract.pdf"
     sample_file.write_bytes(b"contract test document")
 
@@ -199,9 +174,7 @@ def test_e2e_full_ingestion_pipeline_success(
     )
 
     assert response.status_code == 200
-
     data = response.json()
-
     assert data["success"] is True
     assert data["mode"] == "DOCUMENT_INGESTION"
     assert data["workspace_id"] == "ws_enterprise"
@@ -209,11 +182,7 @@ def test_e2e_full_ingestion_pipeline_success(
     assert data["failed_stage"] is None
     assert len(data["stages"]) == 8
 
-    stage_names = [
-        stage["tool_name"]
-        for stage in data["stages"]
-    ]
-
+    stage_names = [stage["tool_name"] for stage in data["stages"]]
     assert stage_names == [
         "upload_document",
         "parse_document",
@@ -226,19 +195,14 @@ def test_e2e_full_ingestion_pipeline_success(
     ]
 
 
-def test_e2e_ingestion_halts_on_validation_failure(
-    mock_pipeline_tool_registry,
-    tmp_path,
-):
+def test_e2e_ingestion_halts_on_validation_failure(mock_pipeline_tool_registry, tmp_path):
     """Verify validation failure stops downstream stages."""
-
     sample_file = tmp_path / "sample_contract.pdf"
     sample_file.write_bytes(b"contract test document")
 
     def get_tool(name: str):
         tool = MagicMock()
         tool.name = name
-
         if name == "validate_document":
             tool.run = AsyncMock(
                 return_value=ToolResult(
@@ -263,20 +227,14 @@ def test_e2e_ingestion_halts_on_validation_failure(
                     execution_time_ms=10.0,
                 )
             )
-
         return tool
 
     mock_pipeline_tool_registry.get.side_effect = get_tool
-
-    runtime = AgentRuntime(
-        registry=mock_pipeline_tool_registry
-    )
+    runtime = AgentRuntime(registry=mock_pipeline_tool_registry, staging_root=tmp_path)
 
     app = FastAPI()
     app.include_router(documents_router)
-
     app.dependency_overrides[get_runtime] = lambda: runtime
-
     client = TestClient(app)
 
     response = client.post(
@@ -289,18 +247,12 @@ def test_e2e_ingestion_halts_on_validation_failure(
     )
 
     assert response.status_code == 200
-
     data = response.json()
-
     assert data["success"] is False
     assert data["failed_stage"] == "validate_document"
     assert len(data["stages"]) == 5
 
-    executed_stages = [
-        stage["tool_name"]
-        for stage in data["stages"]
-    ]
-
+    executed_stages = [stage["tool_name"] for stage in data["stages"]]
     assert "prepare_embedding_content" not in executed_stages
     assert "generate_embeddings" not in executed_stages
     assert "store_vectors" not in executed_stages
@@ -308,7 +260,6 @@ def test_e2e_ingestion_halts_on_validation_failure(
 
 def test_e2e_query_pipeline_scope_preservation(e2e_client):
     """Verify query reaches the runtime with explicit document scope."""
-
     response = e2e_client.post(
         "/query",
         json={
@@ -320,9 +271,7 @@ def test_e2e_query_pipeline_scope_preservation(e2e_client):
     )
 
     assert response.status_code == 200
-
     data = response.json()
-
     assert data["success"] is True
     assert data["mode"] == "QUERY"
     assert data["workspace_id"] == "ws_enterprise"
@@ -331,11 +280,8 @@ def test_e2e_query_pipeline_scope_preservation(e2e_client):
     assert data["stages"][0]["tool_name"] == "query_documents"
 
 
-def test_e2e_query_pipeline_rejects_missing_document_scope(
-    e2e_client,
-):
+def test_e2e_query_pipeline_rejects_missing_document_scope(e2e_client):
     """Verify queries without explicit document scope are rejected."""
-
     response = e2e_client.post(
         "/query",
         json={
@@ -344,28 +290,21 @@ def test_e2e_query_pipeline_rejects_missing_document_scope(
             "query": "Global search prompt",
         },
     )
-
     assert response.status_code in (400, 422)
 
 
-def test_e2e_sanitized_internal_error_handling(
-    mock_pipeline_tool_registry,
-    tmp_path,
-):
+def test_e2e_sanitized_internal_error_handling(mock_pipeline_tool_registry, tmp_path):
     """Verify internal exceptions are not exposed to API clients."""
-
     sample_file = tmp_path / "sample.pdf"
     sample_file.write_bytes(b"test document")
 
     def get_tool(name: str):
         tool = MagicMock()
         tool.name = name
-
         if name == "upload_document":
             tool.run = AsyncMock(
                 side_effect=RuntimeError(
-                    "CRITICAL_DB_SECRET_KEY_12345 "
-                    "/internal/database/path"
+                    "CRITICAL_DB_SECRET_KEY_12345 /internal/database/path"
                 )
             )
         else:
@@ -376,20 +315,14 @@ def test_e2e_sanitized_internal_error_handling(
                     execution_time_ms=10.0,
                 )
             )
-
         return tool
 
     mock_pipeline_tool_registry.get.side_effect = get_tool
-
-    runtime = AgentRuntime(
-        registry=mock_pipeline_tool_registry
-    )
+    runtime = AgentRuntime(registry=mock_pipeline_tool_registry, staging_root=tmp_path)
 
     app = FastAPI()
     app.include_router(documents_router)
-
     app.dependency_overrides[get_runtime] = lambda: runtime
-
     client = TestClient(app)
 
     response = client.post(
@@ -402,12 +335,9 @@ def test_e2e_sanitized_internal_error_handling(
     )
 
     assert response.status_code in (200, 500)
-
     data = response.json()
-
     assert data["success"] is False
     assert data["mode"] == "DOCUMENT_INGESTION"
     assert data["failed_stage"] is None
-
     assert "CRITICAL_DB_SECRET_KEY_12345" not in str(data)
     assert "/internal/database/path" not in str(data)

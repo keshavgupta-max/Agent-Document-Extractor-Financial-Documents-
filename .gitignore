@@ -67,17 +67,28 @@ database/*
 !database/.gitkeep
 
 # ============================================================
-# Generated / Temporary Data
+# Project Generated / Temporary Data
 # ============================================================
 
+data/staging/*
+data/storage/documents/*
+data/chroma/
+data/logs/*
 data/temp/
 data/tmp/
 data/processed/
 data/output/
 data/generated/
 
+# Keep required project directories in Git
+!data/staging/.gitkeep
+!data/storage/documents/.gitkeep
+!data/chroma/.gitkeep
+!data/logs/.gitkeep
+!data/temp/.gitkeep
+
 # ============================================================
-# Local Vector Database / Chroma
+# Local Vector Databases
 # ============================================================
 
 .chroma/
@@ -113,24 +124,3 @@ models/*.safetensors
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Runtime / generated data
-data/staging/*
-data/storage/documents/*
-data/chroma/*
-data/logs/*
-data/temp/*
-
-# Keep required directories in Git
-!data/staging/.gitkeep
-!data/storage/documents/.gitkeep
-!data/chroma/.gitkeep
-!data/logs/.gitkeep
-!data/temp/.gitkeep
-
-# Python / test artifacts
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.coverage
-htmlcov/

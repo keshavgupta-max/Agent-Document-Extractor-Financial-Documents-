@@ -6,6 +6,10 @@ DEFAULT_QUERY_MODEL: str = "gemini-3.6-flash"
 # Input Validation Limits
 MAX_QUERY_LENGTH: int = 1000
 
+# Semantic Similarity Guardrail Threshold
+# (ChromaDB cosine distance scale: lower is more similar; values > 0.85 indicate non-relevant context)
+MAX_RELEVANT_DISTANCE_THRESHOLD: float = 0.85
+
 # Prompt-Injection Resistance System Instructions
 SYSTEM_INSTRUCTIONS: str = (
     "You are a strict B2B Business Document Assistant. "

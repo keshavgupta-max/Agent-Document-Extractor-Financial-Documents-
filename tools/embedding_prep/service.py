@@ -238,5 +238,11 @@ class EmbeddingPrepService:
                     raw_lines.append(f"[Page {page.page_number}]\n{page.text.strip()}")
             if len(raw_lines) > 1:
                 blocks.append("\n".join(raw_lines))
-
-        return blocks
+        # Additional Fields / Statement Summaries Details
+        if doc.additional_fields:
+            add_lines = ["=== ADDITIONAL DETAILS & SUMMARY ==="]
+            for key, val in doc.additional_fields.items():
+                formatted_key = key.replace("_", " ").title()
+                add_lines.append(f"{formatted_key}: {val}")
+            blocks.append("\n".join(add_lines))
+            return blocks

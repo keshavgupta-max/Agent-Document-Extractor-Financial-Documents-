@@ -1,7 +1,7 @@
 """Query Service executing grounded AI question-answering over retrieved vector context."""
 
 import time
-from typing import List, Optional, Any
+from typing import Any, List, Optional
 from google import genai
 from google.genai import types
 
@@ -9,8 +9,13 @@ from config import settings
 from logger import logger
 from tools.embedding.models import EmbeddingInput
 from tools.embedding.service import EmbeddingService
-from tools.embedding_prep.models import PreparedDocumentContent, PreparedChunk
-from tools.query.constants import DEFAULT_QUERY_MODEL, MAX_QUERY_LENGTH, SYSTEM_INSTRUCTIONS
+from tools.embedding_prep.models import PreparedChunk, PreparedDocumentContent
+from tools.query.constants import (
+    DEFAULT_QUERY_MODEL,
+    MAX_QUERY_LENGTH,
+    MAX_RELEVANT_DISTANCE_THRESHOLD,
+    SYSTEM_INSTRUCTIONS,
+)
 from tools.query.exceptions import AIProviderError, InvalidQueryInputError, QueryError
 from tools.query.models import QueryInput, QueryResult, QuerySourceChunk
 from tools.vector_retrieval.models import VectorRetrievalInput
@@ -111,7 +116,7 @@ class QueryService:
             retrieval_result = self._retrieval_service.retrieve(retrieval_input)
             retrieval_ms = retrieval_result.processing_time_ms
 
-            # Defense-in-depth scope verification
+            # Scope verification
             for chunk in retrieval_result.retrieved_chunks:
                 if (
                     chunk.workspace_id != workspace_id
@@ -128,8 +133,16 @@ class QueryService:
             )
             context_construction_ms = (time.perf_counter() - t_ctx_start) * 1000.0
 
-            # 4. Generate grounded AI response
-            if not retrieval_result.retrieved_chunks:
+            # Determine if at least one chunk satisfies explicit minimum similarity distance
+            has_relevant_chunk = False
+            if retrieval_result.retrieved_chunks:
+                for chunk in retrieval_result.retrieved_chunks:
+                    if chunk.distance is not None and chunk.distance <= MAX_RELEVANT_DISTANCE_THRESHOLD:
+                        has_relevant_chunk = True
+                        break
+
+            # 4. Generate grounded AI response or early short-circuit
+            if not retrieval_result.retrieved_chunks or not has_relevant_chunk:
                 ai_answer = (
                     "The available selected documents do not provide enough information to answer this question."
                 )

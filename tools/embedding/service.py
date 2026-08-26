@@ -1,5 +1,7 @@
 """Service responsible for generating embedding vectors using Google GenAI SDK."""
 
+import random
+import re
 import time
 from typing import List, Optional
 from google import genai
@@ -10,7 +12,10 @@ from logger import logger
 from tools.embedding.constants import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_VECTOR_DIMENSIONS,
+    EMBEDDING_RETRY_BASE_DELAY_SECONDS,
+    EMBEDDING_RETRY_MAX_DELAY_SECONDS,
     MAX_EMBEDDING_BATCH_SIZE,
+    MAX_EMBEDDING_RETRIES,
 )
 from tools.embedding.exceptions import (
     EmbeddingGenerationError,
@@ -34,10 +39,16 @@ class EmbeddingService:
         api_key: Optional[str] = None,
         model_name: str = DEFAULT_EMBEDDING_MODEL,
         vector_dimensions: int = DEFAULT_VECTOR_DIMENSIONS,
+        max_retries: int = MAX_EMBEDDING_RETRIES,
+        base_delay: float = EMBEDDING_RETRY_BASE_DELAY_SECONDS,
+        max_delay: float = EMBEDDING_RETRY_MAX_DELAY_SECONDS,
     ) -> None:
         self._api_key = api_key or getattr(settings, "GEMINI_API_KEY", None)
         self._model_name = model_name
         self._vector_dimensions = vector_dimensions
+        self._max_retries = max_retries
+        self._base_delay = base_delay
+        self._max_delay = max_delay
 
         if self._api_key:
             self._client = genai.Client(api_key=self._api_key)
@@ -147,44 +158,101 @@ class EmbeddingService:
             raise EmbeddingGenerationError(error_msg) from exc
 
     def _call_provider_api_batch(self, texts: List[str]) -> List[List[float]]:
-        """Calls client.models.embed_content using types.Content wrappers per text to guarantee true batching and independent 1-to-1 vector generation."""
-        try:
-            # Wrap each string into a distinct types.Content object to force independent chunk embeddings in a single request
-            content_objects = [
-                types.Content(parts=[types.Part.from_text(text=t)]) for t in texts
-            ]
+        """Calls client.models.embed_content using types.Content wrappers per text to guarantee true batching and independent 1-to-1 vector generation.
+           Applies exponential backoff with jitter on HTTP 429 / RESOURCE_EXHAUSTED errors.
+        """
+        content_objects = [
+            types.Content(parts=[types.Part.from_text(text=t)]) for t in texts
+        ]
 
-            config = types.EmbedContentConfig(
-                output_dimensionality=self._vector_dimensions,
-            )
+        config = types.EmbedContentConfig(
+            output_dimensionality=self._vector_dimensions,
+        )
 
-            response = self._client.models.embed_content(
-                model=self._model_name,
-                contents=content_objects,
-                config=config,
-            )
-
-            if not response or not hasattr(response, "embeddings") or not response.embeddings:
-                raise ProviderAPIError("Provider returned an empty or malformed embeddings response.")
-
-            if len(response.embeddings) != len(content_objects):
-                raise ProviderAPIError(
-                    f"Provider returned {len(response.embeddings)} embeddings, but "
-                    f"{len(content_objects)} content objects were sent."
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._client.models.embed_content(
+                    model=self._model_name,
+                    contents=content_objects,
+                    config=config,
                 )
 
-            extracted_vectors: List[List[float]] = []
-            for emb_item in response.embeddings:
-                if hasattr(emb_item, "values") and emb_item.values is not None:
-                    extracted_vectors.append(list(emb_item.values))
-                else:
-                    raise ProviderAPIError("Embedding item missing 'values' array in response.")
+                if not response or not hasattr(response, "embeddings") or not response.embeddings:
+                    raise ProviderAPIError("Provider returned an empty or malformed embeddings response.")
 
-            return extracted_vectors
+                if len(response.embeddings) != len(content_objects):
+                    raise ProviderAPIError(
+                        f"Provider returned {len(response.embeddings)} embeddings, but "
+                        f"{len(content_objects)} content objects were sent."
+                    )
 
-        except Exception as exc:
-            if isinstance(exc, ProviderAPIError):
-                raise
-            error_msg = f"Google GenAI embedding API call failed: {str(exc)}"
-            logger.error(error_msg)
-            raise ProviderAPIError(error_msg) from exc
+                extracted_vectors: List[List[float]] = []
+                for emb_item in response.embeddings:
+                    if hasattr(emb_item, "values") and emb_item.values is not None:
+                        extracted_vectors.append(list(emb_item.values))
+                    else:
+                        raise ProviderAPIError("Embedding item missing 'values' array in response.")
+
+                return extracted_vectors
+
+            except Exception as exc:
+                if isinstance(exc, ProviderAPIError):
+                    raise
+
+                if self._is_rate_limit_error(exc) and attempt < self._max_retries:
+                    retry_delay = self._calculate_retry_delay(exc, attempt)
+                    logger.warning(
+                        "Encountered rate limit (429/RESOURCE_EXHAUSTED) during embedding generation. "
+                        "Backing off for %.2fs before retry (Attempt %d/%d)...",
+                        retry_delay,
+                        attempt + 1,
+                        self._max_retries,
+                    )
+                    time.sleep(retry_delay)
+                    continue
+
+                error_msg = f"Google GenAI embedding API call failed: {str(exc)}"
+                logger.error(error_msg)
+                raise ProviderAPIError(error_msg) from exc
+
+    def _is_rate_limit_error(self, exc: Exception) -> bool:
+        """Determines if an exception corresponds to an explicit 429 / rate limit / quota exhaustion."""
+        err_msg = str(exc).lower()
+        return (
+            "429" in err_msg
+            or "resource_exhausted" in err_msg
+            or "quota exceeded" in err_msg
+            or "rate limit" in err_msg
+            or getattr(exc, "code", None) == 429
+            or getattr(exc, "status_code", None) == 429
+        )
+
+    def _calculate_retry_delay(self, exc: Exception, attempt: int) -> float:
+        """Calculates backoff delay preferring provider retry-after metadata when available, falling back to exponential backoff with full jitter."""
+        # Check for explicit retry-after metadata or response headers
+        retry_after = getattr(exc, "retry_after", None)
+        if retry_after is not None:
+            try:
+                delay = float(retry_after)
+                if delay > 0:
+                    return min(delay, self._max_delay)
+            except (ValueError, TypeError):
+                pass
+
+        # Check for retry-after embedded in error message strings
+        err_msg = str(exc)
+        match = re.search(r"retry in (\d+(?:\.\d+)?)s", err_msg, re.IGNORECASE) or re.search(
+            r"retry-after:\s*(\d+(?:\.\d+)?)", err_msg, re.IGNORECASE
+        )
+        if match:
+            try:
+                delay = float(match.group(1))
+                if delay > 0:
+                    return min(delay, self._max_delay)
+            except (ValueError, TypeError):
+                pass
+
+        # Exponential backoff with full jitter: Uniform(0, min(max_delay, base_delay * 2^attempt))
+        exponential_cap = min(self._max_delay, self._base_delay * (2 ** attempt))
+        delay = random.uniform(self._base_delay / 2.0, exponential_cap)
+        return max(0.5, delay)

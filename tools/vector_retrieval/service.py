@@ -1,8 +1,9 @@
 """Service executing vector similarity search over local ChromaDB with strict metadata isolation."""
 
+import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -30,6 +31,27 @@ from tools.vector_retrieval.models import (
     VectorRetrievalInput,
     VectorRetrievalResult,
 )
+
+# Deterministic aggregate query keyword patterns
+AGGREGATE_KEYWORD_PATTERNS = [
+    r"\btotal\b",
+    r"\bsum\b",
+    r"\bcombined\b",
+    r"\baggregate\b",
+    r"\boverall\b",
+    r"\baltogether\b",
+    r"\bentire\b",
+    r"\bhow much in total\b",
+    r"\btotal amount\b",
+    r"\btotal credited\b",
+    r"\btotal debited\b",
+    r"\bgrand total\b",
+    r"\bnet balance\b",
+    r"\btotal spent\b",
+    r"\btotal received\b",
+    r"\bacross all\b",
+    r"\bcombined total\b",
+]
 
 
 class VectorRetrievalService:
@@ -76,6 +98,16 @@ class VectorRetrievalService:
 
         return self._client
 
+    def _is_aggregate_query(self, query_text: Optional[str]) -> bool:
+        """Determines if query expresses aggregate/holistic summary intent using deterministic regex rules."""
+        if not query_text or not query_text.strip():
+            return False
+        clean_q = query_text.strip().lower()
+        for pat in AGGREGATE_KEYWORD_PATTERNS:
+            if re.search(pat, clean_q):
+                return True
+        return False
+
     def retrieve(
         self,
         input_data: VectorRetrievalInput,
@@ -121,6 +153,7 @@ class VectorRetrievalService:
             )
 
             retrieved_chunks: List[RetrievedChunk] = []
+            seen_chunk_ids: Set[str] = set()
 
             if results and results.get("ids") and len(results["ids"]) > 0:
                 raw_ids = results["ids"][0]
@@ -242,6 +275,88 @@ class VectorRetrievalService:
                             distance=dist,
                         )
                     )
+                    seen_chunk_ids.add(chunk_id)
+
+            # Aggregate query summary augmentation: fetch chunk_index=0 for each selected document
+            query_text = getattr(input_data, "query_text", None)
+            if self._is_aggregate_query(query_text):
+                logger.info("Aggregate query intent detected. Augmenting context with authoritative summary chunks.")
+                for d_id in doc_ids:
+                    # Binary $and filter matching workspace_id, document_id, and chunk_index == 0
+                    summary_where = {
+                        "$and": [
+                            {
+                                "$and": [
+                                    {META_KEY_WORKSPACE_ID: {"$eq": workspace_id}},
+                                    {META_KEY_DOCUMENT_ID: {"$eq": d_id}},
+                                ]
+                            },
+                            {META_KEY_CHUNK_INDEX: {"$eq": 0}},
+                        ]
+                    }
+
+                    try:
+                        summary_records = collection.get(
+                            where=summary_where,
+                            include=["documents", "metadatas"],
+                        )
+                    except Exception as get_exc:
+                        logger.warning("Summary chunk query fallback triggered for doc '%s': %s", d_id, str(get_exc))
+                        summary_records = collection.get(
+                            where={
+                                "$and": [
+                                    {META_KEY_WORKSPACE_ID: {"$eq": workspace_id}},
+                                    {META_KEY_DOCUMENT_ID: {"$eq": d_id}},
+                                ]
+                            },
+                            include=["documents", "metadatas"],
+                        )
+
+                    s_ids = summary_records.get("ids") or []
+                    s_docs = summary_records.get("documents") or []
+                    s_metas = summary_records.get("metadatas") or []
+
+                    for s_idx in range(len(s_ids)):
+                        s_meta = s_metas[s_idx] if s_idx < len(s_metas) else {}
+                        if not isinstance(s_meta, dict):
+                            continue
+
+                        try:
+                            s_chunk_idx = int(s_meta.get(META_KEY_CHUNK_INDEX, -1))
+                        except (TypeError, ValueError):
+                            continue
+
+                        if s_chunk_idx == 0:
+                            s_chunk_id = str(s_meta.get(META_KEY_CHUNK_ID, s_ids[s_idx])).strip()
+                            s_doc_id = str(s_meta.get(META_KEY_DOCUMENT_ID, d_id)).strip()
+                            s_ws_id = str(s_meta.get(META_KEY_WORKSPACE_ID, workspace_id)).strip()
+                            s_doc_type = str(s_meta.get(META_KEY_DOCUMENT_TYPE, "UNKNOWN")).strip()
+                            s_text = s_docs[s_idx] if s_idx < len(s_docs) and s_docs[s_idx] is not None else ""
+
+                            # Defense-in-depth scope check
+                            if s_ws_id != workspace_id or s_doc_id not in doc_ids:
+                                continue
+
+                            if s_chunk_id not in seen_chunk_ids:
+                                retained_s_meta = RetainedChunkMetadata(
+                                    chunk_id=s_chunk_id,
+                                    document_id=s_doc_id,
+                                    workspace_id=s_ws_id,
+                                    chunk_index=0,
+                                    document_type=s_doc_type,
+                                )
+
+                                summary_chunk = RetrievedChunk(
+                                    chunk_id=s_chunk_id,
+                                    document_id=s_doc_id,
+                                    workspace_id=s_ws_id,
+                                    text_content=s_text,
+                                    metadata=retained_s_meta,
+                                    distance=None,
+                                )
+                                retrieved_chunks.insert(0, summary_chunk)
+                                seen_chunk_ids.add(s_chunk_id)
+                            break
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 

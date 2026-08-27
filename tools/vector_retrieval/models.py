@@ -59,3 +59,7 @@ class VectorRetrievalInput(BaseModel):
         default=DEFAULT_TOP_K,
         description="Number of top matching chunks to retrieve",
     )
+    query_text: Optional[str] = Field(
+    default=None,
+    description="Optional raw query text for aggregate intent detection",
+    )

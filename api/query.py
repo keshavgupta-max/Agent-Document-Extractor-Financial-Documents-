@@ -4,9 +4,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from core.runtime import AgentRuntime
-from core.runtime_models import QueryPipelineInput, PipelineExecutionResult
 from api.dependencies import get_runtime
+from core.runtime import AgentRuntime
+from core.runtime_models import PipelineExecutionResult, QueryPipelineInput
 from logger import logger
 
 router = APIRouter(prefix="/query", tags=["Query"])
@@ -19,7 +19,8 @@ class QueryDocumentRequest(BaseModel):
     selected_document_ids: List[str] = Field(
         ...,
         min_length=1,
-        description="Explicit list of document IDs to restrict querying scope",
+        max_length=5,
+        description="Explicit list of 1 to 5 document IDs to restrict querying scope",
     )
     query: str = Field(..., min_length=1, description="User query prompt")
     top_k: Optional[int] = Field(default=5, ge=1, le=20, description="Top-k chunks to retrieve")
@@ -49,6 +50,12 @@ async def query_documents(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="selected_document_ids must contain at least one valid non-empty document ID.",
+        )
+
+    if len(valid_doc_ids) > 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="selected_document_ids cannot exceed 5 documents per query.",
         )
 
     clean_query = request.query.strip()

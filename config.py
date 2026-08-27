@@ -1,6 +1,6 @@
 """Application configuration module using Pydantic V2 Settings."""
 
-from typing import Literal
+from typing import List, Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,9 +28,18 @@ class Settings(BaseSettings):
         description="Path to the system prompt text file",
     )
     GEMINI_API_KEY: str = Field(
-    default="",
-    description="Google Gemini API key",
-)
+        default="",
+        description="Google Gemini API key",
+    )
+    CORS_ORIGINS: List[str] = Field(
+        default=[
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ],
+        description="Allowed CORS origin domains",
+    )
 
 
 def get_settings() -> Settings:

@@ -44,6 +44,7 @@ class EmbeddingPrepService:
             ChunkingExecutionError: If execution fails unexpectedly during chunk creation.
         """
         struct_doc = input_data.structured_document
+
         if not struct_doc or not struct_doc.document_id:
             error_msg = "Invalid or missing StructuredBusinessDocument in EmbeddingPrepInput."
             logger.error(error_msg)
@@ -60,21 +61,26 @@ class EmbeddingPrepService:
         doc_type = struct_doc.metadata.document_type
 
         try:
-            logger.info("Preparing embedding content for doc_id: %s | Workspace: %s", doc_id, workspace_id)
+            logger.info(
+                "Preparing embedding content for doc_id: %s | Workspace: %s",
+                doc_id,
+                workspace_id,
+            )
 
-            # 1. Build unified, clean semantic text representation
+            # 1. Build unified semantic text representation.
             full_text_blocks = self._build_semantic_blocks(input_data)
             full_semantic_text = "\n\n".join(full_text_blocks)
 
-            # 2. Generate overlapping text chunks
+            # 2. Generate overlapping text chunks.
             raw_chunks = create_overlapping_chunks(full_semantic_text)
             total_chunks = len(raw_chunks)
 
-            # 3. Build PreparedChunk models with strict workspace/document metadata
+            # 3. Build PreparedChunk models with strict workspace/document metadata.
             prepared_chunks: List[PreparedChunk] = []
+
             for idx, chunk_text in enumerate(raw_chunks):
                 chunk_id = generate_chunk_id(doc_id, idx)
-                
+
                 chunk_metadata: Dict[str, Any] = {
                     META_KEY_WORKSPACE_ID: workspace_id,
                     META_KEY_DOCUMENT_ID: doc_id,
@@ -128,26 +134,44 @@ class EmbeddingPrepService:
             raise
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-            error_msg = f"Error during embedding preparation for document '{doc_id}': {str(exc)}"
+            error_msg = (
+                f"Error during embedding preparation for document "
+                f"'{doc_id}': {str(exc)}"
+            )
             logger.error(error_msg, exc_info=True)
             raise ChunkingExecutionError(error_msg) from exc
 
     def _build_semantic_blocks(self, input_data: EmbeddingPrepInput) -> List[str]:
-        """Converts structured document components into clean text paragraphs."""
+        """Converts structured document components into ordered semantic text blocks."""
         doc = input_data.structured_document
         blocks: List[str] = []
 
-        # Document Summary Block
+        # Block 1: Document Summary
         blocks.append(
             f"=== {SECTION_SUMMARY} ===\n"
             f"Document Type: {doc.metadata.document_type}\n"
             f"Document ID: {doc.document_id}\n"
-            f"Validation Status: {'Valid' if input_data.is_valid else 'Invalid/Has Warnings'}"
+            f"Validation Status: "
+            f"{'Valid' if input_data.is_valid else 'Invalid/Has Warnings'}"
         )
 
-        # Header Details
+        # Block 2: Additional Fields / Statement Aggregates.
+        # Keep this near the beginning so aggregate facts are available
+        # in the first chunk for large bank statements.
+        if doc.additional_fields:
+            add_lines = ["=== ADDITIONAL DETAILS & SUMMARY ==="]
+
+            for key, val in doc.additional_fields.items():
+                formatted_key = key.replace("_", " ").title()
+                add_lines.append(f"{formatted_key}: {val}")
+
+            if len(add_lines) > 1:
+                blocks.append("\n".join(add_lines))
+
+        # Block 3: Header Details
         header = doc.header
         header_lines = [f"=== {SECTION_HEADER} ==="]
+
         if header.document_number:
             header_lines.append(f"Number: {header.document_number}")
         if header.document_date:
@@ -158,12 +182,14 @@ class EmbeddingPrepService:
             header_lines.append(f"Reference PO/Ref: {header.reference_number}")
         if header.place_of_supply:
             header_lines.append(f"Place of Supply: {header.place_of_supply}")
+
         if len(header_lines) > 1:
             blocks.append("\n".join(header_lines))
 
-        # Seller / Vendor Info
+        # Block 4: Seller / Vendor Info
         seller = doc.seller
         seller_lines = [f"=== {SECTION_SELLER} ==="]
+
         if seller.name:
             seller_lines.append(f"Name: {seller.name}")
         if seller.gstin:
@@ -172,12 +198,14 @@ class EmbeddingPrepService:
             seller_lines.append(f"PAN: {seller.pan}")
         if seller.address:
             seller_lines.append(f"Address: {seller.address}")
+
         if len(seller_lines) > 1:
             blocks.append("\n".join(seller_lines))
 
-        # Buyer / Customer Info
+        # Block 5: Buyer / Customer Info
         buyer = doc.buyer
         buyer_lines = [f"=== {SECTION_BUYER} ==="]
+
         if buyer.name:
             buyer_lines.append(f"Name: {buyer.name}")
         if buyer.gstin:
@@ -186,63 +214,81 @@ class EmbeddingPrepService:
             buyer_lines.append(f"PAN: {buyer.pan}")
         if buyer.address:
             buyer_lines.append(f"Address: {buyer.address}")
+
         if len(buyer_lines) > 1:
             blocks.append("\n".join(buyer_lines))
 
-        # Line Items
+        # Block 6: Line Items / Transactions
         if doc.line_items:
             item_lines = [f"=== {SECTION_LINE_ITEMS} ==="]
+
             for item in doc.line_items:
-                item_str = f"Item #{item.item_number or '-'}: {item.description or 'N/A'}"
+                item_str = (
+                    f"Item #{item.item_number or '-'}: "
+                    f"{item.description or 'N/A'}"
+                )
+
                 if item.quantity:
                     item_str += f" | Qty: {item.quantity}"
                 if item.unit_price:
                     item_str += f" | Rate: {item.unit_price}"
                 if item.amount:
                     item_str += f" | Amount: {item.amount}"
+
                 item_lines.append(item_str)
+
             blocks.append("\n".join(item_lines))
 
-        # Tax Details
+        # Block 7: Tax Details and Document Totals
         taxes = doc.taxes
-        tax_lines = [f"=== {SECTION_TAXES} ==="]
+        totals_lines: List[str] = []
+
         if taxes.cgst:
-            tax_lines.append(f"CGST: {taxes.cgst}")
+            totals_lines.append(f"CGST: {taxes.cgst}")
         if taxes.sgst:
-            tax_lines.append(f"SGST: {taxes.sgst}")
+            totals_lines.append(f"SGST: {taxes.sgst}")
         if taxes.igst:
-            tax_lines.append(f"IGST: {taxes.igst}")
+            totals_lines.append(f"IGST: {taxes.igst}")
         if taxes.total_tax:
-            tax_lines.append(f"Total Tax: {taxes.total_tax}")
-        if len(tax_lines) > 1:
-            blocks.append("\n".join(tax_lines))
+            totals_lines.append(f"Total Tax: {taxes.total_tax}")
 
-        # Totals Details
+        if totals_lines:
+            totals_lines.insert(0, f"=== {SECTION_TAXES} ===")
+
         totals = doc.totals
-        totals_lines = [f"=== {SECTION_TOTALS} ==="]
-        if totals.subtotal:
-            totals_lines.append(f"Subtotal: {totals.subtotal}")
-        if totals.tax_amount:
-            totals_lines.append(f"Total Tax: {totals.tax_amount}")
-        if totals.grand_total:
-            totals_lines.append(f"Grand Total: {totals.grand_total}")
-        totals_lines.append(f"Currency: {totals.currency or 'INR'}")
-        blocks.append("\n".join(totals_lines))
 
-        # Supplementary Raw Pages from ParsedDocument if available
+        document_total_lines = [f"=== {SECTION_TOTALS} ==="]
+
+        if totals.subtotal:
+            document_total_lines.append(f"Subtotal: {totals.subtotal}")
+        if totals.tax_amount:
+            document_total_lines.append(f"Total Tax: {totals.tax_amount}")
+        if totals.grand_total:
+            document_total_lines.append(f"Grand Total: {totals.grand_total}")
+
+        document_total_lines.append(
+            f"Currency: {totals.currency or 'INR'}"
+        )
+
+        if len(document_total_lines) > 1:
+            totals_lines.extend(document_total_lines)
+
+        if totals_lines:
+            blocks.append("\n".join(totals_lines))
+
+        # Block 8: Supplementary Raw Pages
         parsed_doc = input_data.parsed_document
+
         if parsed_doc and parsed_doc.pages:
             raw_lines = [f"=== {SECTION_RAW_PAGES} ==="]
+
             for page in parsed_doc.pages:
                 if page.text and page.text.strip():
-                    raw_lines.append(f"[Page {page.page_number}]\n{page.text.strip()}")
+                    raw_lines.append(
+                        f"[Page {page.page_number}]\n{page.text.strip()}"
+                    )
+
             if len(raw_lines) > 1:
                 blocks.append("\n".join(raw_lines))
-        # Additional Fields / Statement Summaries Details
-        if doc.additional_fields:
-            add_lines = ["=== ADDITIONAL DETAILS & SUMMARY ==="]
-            for key, val in doc.additional_fields.items():
-                formatted_key = key.replace("_", " ").title()
-                add_lines.append(f"{formatted_key}: {val}")
-            blocks.append("\n".join(add_lines))
-            return blocks
+
+        return blocks

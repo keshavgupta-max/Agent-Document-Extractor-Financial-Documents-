@@ -1,4 +1,4 @@
-"""Extractor for Bank Statements."""
+"""Extractor for Bank Statements supporting heterogeneous column formats."""
 
 import re
 from typing import Any, Dict, List, Optional
@@ -8,8 +8,7 @@ from tools.extractor.models import (
     LineItem,
     StructuredBusinessDocument,
 )
-from tools.parser.models import ParsedDocument
-
+from tools.parser.models import ParsedDocument, TableContent
 CREDIT_ALIASES = {
     "credit",
     "credits",
@@ -49,6 +48,35 @@ BALANCE_ALIASES = {
     "running balance",
     "bal",
 }
+
+DIRECTION_ALIASES = {
+    "type",
+    "transaction type",
+    "txn type",
+    "cr/dr",
+    "cr / dr",
+    "dr/cr",
+    "d/c",
+    "c/d",
+    "direction",
+    "cr dr",
+    "dr cr",
+    "credit/debit",
+}
+
+AMOUNT_ALIASES = {
+    "amount",
+    "txn amount",
+    "transaction amount",
+    "amount (inr)",
+    "net amount",
+    "total amount",
+    "amount(inr)",
+    "amount in inr",
+}
+
+CREDIT_DIRECTION_VALUES = {"cr", "credit", "credited", "c", "deposit", "dep", "cr."}
+DEBIT_DIRECTION_VALUES = {"dr", "db", "debit", "debited", "d", "withdrawal", "wd", "dr."}
 
 
 def _normalize_header(header: str) -> str:
@@ -92,7 +120,7 @@ class BankStatementExtractor:
             raw_headers = [h.strip() for h in table.headers] if table.headers else []
             normalized_headers = [_normalize_header(h) for h in raw_headers]
 
-            # Resolve credit column for the current table
+            # Priority 1: Check for explicit Credit column
             credit_idx = next(
                 (
                     i
@@ -114,7 +142,7 @@ class BankStatementExtractor:
             if credit_idx is not None:
                 has_credit_column = True
 
-            # Resolve debit column for the current table
+            # Priority 1: Check for explicit Debit column
             debit_idx = next(
                 (
                     i
@@ -136,7 +164,33 @@ class BankStatementExtractor:
             if debit_idx is not None:
                 has_debit_column = True
 
-            # Resolve balance column for the current table
+            # Priority 2: Check for Direction (Type) and Amount columns ONLY if explicit columns absent
+            direction_idx = None
+            amount_idx = None
+            if credit_idx is None and debit_idx is None:
+                direction_idx = next(
+                    (
+                        i
+                        for i, nh in enumerate(normalized_headers)
+                        if nh in DIRECTION_ALIASES
+                        and "mode" not in nh
+                        and "channel" not in nh
+                    ),
+                    None,
+                )
+                amount_idx = next(
+                    (
+                        i
+                        for i, nh in enumerate(normalized_headers)
+                        if nh in AMOUNT_ALIASES
+                        and "balance" not in nh
+                        and "acc" not in nh
+                        and "account" not in nh
+                    ),
+                    None,
+                )
+
+            # Resolve balance column
             balance_idx = next(
                 (
                     i
@@ -153,19 +207,40 @@ class BankStatementExtractor:
                 total_transactions += 1
                 item_counter += 1
 
-                # Accumulate credits
+                # 1. Handle Explicit Credit Column
                 if credit_idx is not None and credit_idx < len(row):
                     cr_val = _parse_amount(row[credit_idx])
                     if cr_val is not None and cr_val > 0:
                         total_credits += cr_val
                         valid_credit_count += 1
 
-                # Accumulate debits
+                # 2. Handle Explicit Debit Column
                 if debit_idx is not None and debit_idx < len(row):
                     dr_val = _parse_amount(row[debit_idx])
                     if dr_val is not None and dr_val > 0:
                         total_debits += dr_val
                         valid_debit_count += 1
+
+                # 3. Handle Type (Cr/Db) + Amount fallback
+                if (
+                    credit_idx is None
+                    and debit_idx is None
+                    and direction_idx is not None
+                    and amount_idx is not None
+                    and direction_idx < len(row)
+                    and amount_idx < len(row)
+                ):
+                    dir_val = row[direction_idx].strip().lower()
+                    amt_val = _parse_amount(row[amount_idx])
+                    if amt_val is not None and amt_val > 0:
+                        if dir_val in CREDIT_DIRECTION_VALUES:
+                            total_credits += amt_val
+                            valid_credit_count += 1
+                            has_credit_column = True
+                        elif dir_val in DEBIT_DIRECTION_VALUES:
+                            total_debits += amt_val
+                            valid_debit_count += 1
+                            has_debit_column = True
 
                 # Track opening/closing balances across tables
                 if balance_idx is not None and balance_idx < len(row):

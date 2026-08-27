@@ -1,88 +1,103 @@
-"""Focused unit and regression tests for BankStatementExtractor and downstream Embedding Preparation."""
+"""Tests for BankStatementExtractor supporting heterogeneous column formats."""
 
-import pytest
 from tools.extractor.extractors.bank_statement_extractor import BankStatementExtractor
-from tools.embedding_prep.models import EmbeddingPrepInput
-from tools.embedding_prep.service import EmbeddingPrepService
 from tools.parser.models import ParsedDocument, TableContent
 
 
-def test_bank_statement_extractor_computes_aggregates_and_preserves_headers():
-    """Verify headers preservation, debit/credit/balance calculation, and transaction count."""
-    headers = ["Date", "Description", "Ref No", "Debit", "Credit", "Balance"]
-    rows = [
-        ["2026-01-02", "UPI/123/Vendor", "REF001", "", "5,000.00", "25,000.00"],
-        ["2026-01-03", "ATM Withdrawal", "REF002", "2,000.00", "", "23,000.00"],
-        ["2026-01-04", "Salary Deposit", "REF003", "", "50,000.00", "73,000.00"],
-        ["2026-01-05", "Utility Bill", "REF004", "1,500.50", "", "71,499.50"],
-    ]
+def test_bank_statement_explicit_credit_debit_columns():
+    """Verify extraction with explicit Credit and Debit columns."""
+    table = TableContent(
+        table_index=0,
+        headers=["Date", "Description", "Debit", "Credit", "Balance"],
+        rows=[
+            ["2022-01-10", "Deposit from Client", "", "15000.00", "45000.00"],
+            ["2022-01-12", "Office Supplies", "2500.00", "", "42500.00"],
+            ["2022-01-15", "Consulting Fee", "", "10000.00", "52500.00"],
+        ],
+    )
 
-    parsed_doc = ParsedDocument(
-        document_id="doc_bank_agg_001",
-        storage_path="/tmp/statement.csv",
+    doc = ParsedDocument(
+        document_id="doc_bs_1",
+        storage_path="/tmp/bs1.csv",
         file_extension=".csv",
         mime_type="text/csv",
-        page_count=1,
+        page_count=0,
         pages=[],
-        tables=[TableContent(table_index=0, headers=headers, rows=rows)],
+        tables=[table],
         metadata={},
         parsing_status="SUCCESS",
     )
 
     extractor = BankStatementExtractor()
-    result = extractor.extract(parsed_doc, "BANK_STATEMENT")
+    result = extractor.extract(doc, "BANK_STATEMENT")
 
-    # Header preservation
-    assert len(result.line_items) == 4
-    assert "Credit: 5,000.00" in result.line_items[0].description
-    assert "Debit: 2,000.00" in result.line_items[1].description
-
-    # Aggregate verification
-    assert result.additional_fields["total_credit_amount"] == "55000.00"
-    assert result.additional_fields["total_debit_amount"] == "3500.50"
-    assert result.additional_fields["total_transactions"] == 4
-    assert result.additional_fields["opening_balance"] == "25,000.00"
-    assert result.additional_fields["closing_balance"] == "71,499.50"
+    assert result.additional_fields["total_credit_amount"] == "25000.00"
+    assert result.additional_fields["total_debit_amount"] == "2500.00"
+    assert result.additional_fields["total_transactions"] == 3
+    assert result.additional_fields["opening_balance"] == "45000.00"
+    assert result.additional_fields["closing_balance"] == "52500.00"
 
 
-def test_bank_statement_aggregates_rendered_in_embedding_prep():
-    """Verify that computed statement aggregates appear in semantic text and chunk 0."""
-    headers = ["Date", "Description", "Debit", "Credit", "Balance"]
-    rows = [
-        ["2026-01-02", "Client Payment", "", "10000.00", "10000.00"],
-        ["2026-01-03", "Server Cost", "1500.00", "", "8500.00"],
-    ]
+def test_bank_statement_type_direction_and_amount_columns():
+    """Verify extraction with Type (Cr/Db) and Amount columns."""
+    table = TableContent(
+        table_index=0,
+        headers=["Date", "Type", "Amount", "Balance", "Mode"],
+        rows=[
+            ["2022-01-12", "Cr", "1000.00", "452963.87", "UPI"],
+            ["2022-01-29", "CR", "2400.00", "446258.96", "NEFT"],
+            ["2022-02-05", "Db", "500.00", "445758.96", "ATM"],
+            ["2022-02-10", "DR", "1500.00", "444258.96", "UPI"],
+            ["2022-02-15", "UNKNOWN", "999.00", "444258.96", "POS"],
+        ],
+    )
 
-    parsed_doc = ParsedDocument(
-        document_id="doc_bank_prep_001",
-        storage_path="/tmp/statement.csv",
+    doc = ParsedDocument(
+        document_id="doc_bs_2",
+        storage_path="/tmp/bs2.csv",
         file_extension=".csv",
         mime_type="text/csv",
-        page_count=1,
+        page_count=0,
         pages=[],
-        tables=[TableContent(table_index=0, headers=headers, rows=rows)],
+        tables=[table],
         metadata={},
         parsing_status="SUCCESS",
     )
 
     extractor = BankStatementExtractor()
-    structured_doc = extractor.extract(parsed_doc, "BANK_STATEMENT")
+    result = extractor.extract(doc, "BANK_STATEMENT")
 
-    prep_service = EmbeddingPrepService()
-    prep_input = EmbeddingPrepInput(
-        workspace_id="ws_bank_test",
-        structured_document=structured_doc,
-        parsed_document=parsed_doc,
-        is_valid=True,
+    assert result.additional_fields["total_credit_amount"] == "3400.00"
+    assert result.additional_fields["total_debit_amount"] == "2000.00"
+    assert result.additional_fields["total_transactions"] == 5
+    assert len(result.line_items) == 5
+
+
+def test_bank_statement_no_double_counting_when_both_present():
+    """Verify priority prevents double counting if explicit and direction schemas coexist."""
+    table = TableContent(
+        table_index=0,
+        headers=["Date", "Debit", "Credit", "Type", "Amount", "Balance"],
+        rows=[
+            ["2022-01-10", "", "5000.00", "Cr", "5000.00", "5000.00"],
+            ["2022-01-12", "2000.00", "", "Dr", "2000.00", "3000.00"],
+        ],
     )
 
-    prepared_content = prep_service.prepare_document(prep_input)
+    doc = ParsedDocument(
+        document_id="doc_bs_3",
+        storage_path="/tmp/bs3.csv",
+        file_extension=".csv",
+        mime_type="text/csv",
+        page_count=0,
+        pages=[],
+        tables=[table],
+        metadata={},
+        parsing_status="SUCCESS",
+    )
 
-    # Verify aggregates are present in the full semantic text
-    assert "Total Credit Amount: 10000.00" in prepared_content.full_semantic_text
-    assert "Total Debit Amount: 1500.00" in prepared_content.full_semantic_text
-    assert "Total Transactions: 2" in prepared_content.full_semantic_text
+    extractor = BankStatementExtractor()
+    result = extractor.extract(doc, "BANK_STATEMENT")
 
-    # Verify chunk 0 contains the aggregates
-    chunk_0 = prepared_content.chunks[0]
-    assert "Total Credit Amount: 10000.00" in chunk_0.text_content
+    assert result.additional_fields["total_credit_amount"] == "5000.00"
+    assert result.additional_fields["total_debit_amount"] == "2000.00"

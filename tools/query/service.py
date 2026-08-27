@@ -112,6 +112,7 @@ class QueryService:
                 selected_document_ids=doc_ids,
                 query_embedding=query_vector,
                 top_k=top_k,
+                query_text=input_data.query,
             )
             retrieval_result = self._retrieval_service.retrieve(retrieval_input)
             retrieval_ms = retrieval_result.processing_time_ms

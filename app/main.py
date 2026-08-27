@@ -4,15 +4,16 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict
 
 from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.documents import router as documents_router
+from api.query import router as query_router
 from api.upload import router as upload_router
 from config import settings
 from core.runtime import AgentRuntime
 from exceptions import BaseAgentException
 from logger import logger
-from api.documents import router as documents_router
-from api.query import router as query_router
 
 runtime = AgentRuntime()
 
@@ -35,6 +36,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Register CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Register API Routers
 app.include_router(upload_router)

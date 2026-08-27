@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.analytics import router as analytics_router
 from api.documents import router as documents_router
 from api.query import router as query_router
 from api.upload import router as upload_router
@@ -49,6 +50,7 @@ app.add_middleware(
 app.include_router(upload_router)
 app.include_router(documents_router)
 app.include_router(query_router)
+app.include_router(analytics_router)
 
 
 @app.exception_handler(BaseAgentException)

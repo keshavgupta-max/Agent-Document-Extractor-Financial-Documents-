@@ -6,6 +6,8 @@ import { DEFAULT_WORKSPACE_ID, WORKSPACE_STORAGE_KEY } from "@/lib/constants";
 interface WorkspaceContextType {
   workspaceId: string;
   setWorkspaceId: (id: string) => void;
+  selectedDocumentIds: string[];
+  setSelectedDocumentIds: (ids: string[]) => void;
   isInitialized: boolean;
 }
 
@@ -13,6 +15,7 @@ const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefin
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceId, setWorkspaceIdState] = useState<string>(DEFAULT_WORKSPACE_ID);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
   useEffect(() => {
@@ -33,6 +36,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const setWorkspaceId = (id: string) => {
     const cleanId = id.trim() || DEFAULT_WORKSPACE_ID;
     setWorkspaceIdState(cleanId);
+    setSelectedDocumentIds([]); // Reset selection when switching workspace
     try {
       localStorage.setItem(WORKSPACE_STORAGE_KEY, cleanId);
     } catch {
@@ -41,7 +45,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <WorkspaceContext.Provider value={{ workspaceId, setWorkspaceId, isInitialized }}>
+    <WorkspaceContext.Provider
+      value={{
+        workspaceId,
+        setWorkspaceId,
+        selectedDocumentIds,
+        setSelectedDocumentIds,
+        isInitialized,
+      }}
+    >
       {children}
     </WorkspaceContext.Provider>
   );

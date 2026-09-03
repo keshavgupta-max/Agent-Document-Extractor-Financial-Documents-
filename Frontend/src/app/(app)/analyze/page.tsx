@@ -116,7 +116,7 @@ function AnalyzeContent() {
 
   if (!isInitialized || docsLoading) {
     return (
-      <div className="space-y-6 max-w-4xl mx-auto">
+      <div className="space-y-6 w-full max-w-6xl mx-auto">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-12 w-full rounded-lg" />
         <Skeleton className="h-24 w-full rounded-lg" />
@@ -125,13 +125,13 @@ function AnalyzeContent() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto pb-16">
+    <div className="space-y-6 w-full max-w-6xl mx-auto pb-16">
       {/* Top Header */}
-      <div className="border-b border-border pb-4">
-        <h1 className="text-xl font-bold tracking-tight text-typography-primary">
+      <div className="border-b border-border pb-5">
+        <h1 className="text-2xl font-bold tracking-tight text-typography-primary">
           Analyze / Ask AI
         </h1>
-        <p className="text-xs text-typography-secondary">
+        <p className="text-sm text-typography-secondary mt-0.5">
           Ask grounded questions across your selected financial documents with verifiable source citations.
         </p>
       </div>
@@ -150,8 +150,9 @@ function AnalyzeContent() {
         <CardContent className="p-4 sm:p-5">
           <form onSubmit={handleQuerySubmit} className="space-y-3">
             <div className="relative">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-typography-muted" />
+              <Search className="absolute left-3.5 top-3.5 h-4 w-4 text-typography-muted" />
               <textarea
+                aria-label="Ask a question about the selected documents"
                 value={questionInput}
                 onChange={(e) => {
                   setQuestionInput(e.target.value);
@@ -160,22 +161,22 @@ function AnalyzeContent() {
                 disabled={isQuerying || allDocuments.length === 0}
                 placeholder="Ask a question about the selected documents (e.g. 'What is the total credit amount?' or 'What is the grand total for invoice #102?')"
                 rows={3}
-                className="w-full rounded border border-border bg-surface pl-9 pr-3 py-2.5 text-xs text-typography-primary placeholder:text-typography-muted focus:outline-none focus:ring-2 focus:ring-primary-500 shadow-subtle resize-none"
+                className="w-full rounded border border-border bg-surface pl-10 pr-3.5 py-3 text-sm text-typography-primary placeholder:text-typography-muted focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:outline-none shadow-subtle resize-none"
               />
             </div>
 
             {/* Submit Action */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-              <span className="text-[11px] text-typography-muted">
+              <span className="text-xs text-typography-muted">
                 Answers are grounded strictly in the {selectedDocumentIds.length} scoped document{selectedDocumentIds.length !== 1 ? "s" : ""}.
               </span>
 
               <Button
                 type="submit"
                 variant="primary"
-                size="sm"
+                size="md"
                 disabled={isQuerying || allDocuments.length === 0 || !questionInput.trim()}
-                className="w-full sm:w-auto h-8 text-xs"
+                className="w-full sm:w-auto"
               >
                 {isQuerying ? (
                   <>
@@ -215,15 +216,15 @@ function AnalyzeContent() {
       {isQuerying ? (
         <Card className="border-border bg-surface p-8 text-center space-y-3">
           <Loader2 className="h-8 w-8 animate-spin text-primary-600 mx-auto" />
-          <p className="text-xs font-semibold text-typography-primary">
+          <p className="text-sm font-semibold text-typography-primary">
             Retrieving evidence & generating grounded answer...
           </p>
-          <p className="text-[11px] text-typography-muted">
+          <p className="text-xs text-typography-muted">
             Matching vector embeddings across {selectedDocumentIds.length} selected document chunks.
           </p>
         </Card>
       ) : queryResult ? (
-        <AnswerCard queryResult={queryResult} onReset={handleResetQuery} />
+        <AnswerCard queryResult={queryResult} onReset={handleResetQuery} allDocs={allDocuments} />
       ) : (
         <AnalyzeEmptyState docCount={allDocuments.length} />
       )}
@@ -233,7 +234,7 @@ function AnalyzeContent() {
 
 function AnalyzeFallback() {
   return (
-    <div className="space-y-6 max-w-4xl mx-auto pb-16">
+    <div className="space-y-6 w-full max-w-6xl mx-auto pb-16">
       <Skeleton className="h-8 w-48" />
       <Skeleton className="h-12 w-full rounded-lg" />
       <Skeleton className="h-28 w-full rounded-lg" />

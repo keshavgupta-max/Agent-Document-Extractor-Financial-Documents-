@@ -323,34 +323,54 @@ async def get_document_transactions(
         all_transactions: List[TransactionItem] = []
         seen_item_keys: Set[Tuple[int, Optional[str], Optional[float]]] = set()
         seen_item_numbers: Set[int] = set()
+        current_seq_num = 1
 
-        # Parse line items across chunks, ignoring duplicates introduced by chunk overlap
         for _, text_chunk in indexed_chunks:
             lines = text_chunk.split("\n")
             for line in lines:
                 line_clean = line.strip()
-
-                # Match strict line item header: Item <num>: <content>
-                item_header_match = re.match(r"^Item\s+(\d+)\s*:\s*(.+)$", line_clean, re.IGNORECASE)
-                if not item_header_match:
+                if not line_clean:
                     continue
 
-                item_num = int(item_header_match.group(1))
-                item_body = item_header_match.group(2).strip()
+                item_num: Optional[int] = None
+                item_body: Optional[str] = None
+
+                # Match Item #1:, Item 1:, Transaction #3:, Transaction 3:, or unnumbered Item:/Transaction:
+                item_header_match = re.match(
+                    r"^(?:Item|Transaction)\s*#?\s*(\d+)?\s*:\s*(.+)$",
+                    line_clean,
+                    re.IGNORECASE,
+                )
+                if item_header_match:
+                    raw_num = item_header_match.group(1)
+                    if raw_num and raw_num.isdigit():
+                        item_num = int(raw_num)
+                    else:
+                        item_num = current_seq_num
+                    item_body = item_header_match.group(2).strip()
+                # Markdown Table Row fallback: | Date | Description | Type/Amount | ... |
+                elif line_clean.startswith("|") and not line_clean.startswith("|---") and not line_clean.startswith("| Date"):
+                    cols = [c.strip() for c in line_clean.split("|")[1:-1] if c.strip()]
+                    if len(cols) >= 3:
+                        item_num = current_seq_num
+                        item_body = " | ".join(cols)
+
+                if item_num is None or not item_body:
+                    continue
 
                 # Extract Date
-                date_match = re.search(r"Date:\s*([\d\-/]+)", item_body, re.IGNORECASE)
+                date_match = re.search(r"(?:Date:\s*)?([\d]{1,4}[-/][\d]{1,2}[-/][\d]{1,4})", item_body, re.IGNORECASE)
                 date_val = date_match.group(1).strip() if date_match else None
 
                 # Extract Direction Type
-                type_match = re.search(r"Type:\s*([A-Za-z]+)", item_body, re.IGNORECASE)
+                type_match = re.search(r"(?:Type:\s*|\b)(CR|DB|CREDIT|DEBIT)\b", item_body, re.IGNORECASE)
                 type_val = type_match.group(1).upper() if type_match else None
 
                 # Extract Amount
-                amt_match = re.search(r"Amount:\s*([\d\.,-]+)", item_body, re.IGNORECASE)
+                amt_match = re.search(r"(?:Amount:\s*)?([\d,]+\.\d{2})", item_body, re.IGNORECASE)
                 amt_val = _parse_float(amt_match.group(1)) if amt_match else None
 
-                # Deduplication check: Item numbers are deterministic 1-based sequence numbers
+                # Deduplication check
                 dedup_key = (item_num, date_val, amt_val)
                 if item_num in seen_item_numbers or dedup_key in seen_item_keys:
                     continue
@@ -376,6 +396,9 @@ async def get_document_transactions(
                     non_key_parts = [
                         p for p in parts
                         if not any(p.lower().startswith(k) for k in ["date:", "type:", "amount:", "balance:", "mode:", "qty:", "unit price:", "total:"])
+                        and not re.match(r"^[\d,]+\.\d{2}$", p)
+                        and not re.match(r"^[\d]{1,4}[-/][\d]{1,2}[-/][\d]{1,4}$", p)
+                        and p.upper() not in ["CR", "DB", "CREDIT", "DEBIT"]
                     ]
                     desc_val = " | ".join(non_key_parts) if non_key_parts else item_body
 
@@ -394,8 +417,8 @@ async def get_document_transactions(
                 all_transactions.append(transaction_record)
                 seen_item_numbers.add(item_num)
                 seen_item_keys.add(dedup_key)
+                current_seq_num = max(current_seq_num, item_num + 1)
 
-        # Sort transactions in stable item_number order
         all_transactions.sort(key=lambda t: t.item_number)
         paginated = all_transactions[offset : offset + limit]
 

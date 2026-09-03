@@ -40,6 +40,9 @@ class EmbeddingGenerationMetadata(BaseModel):
     document_id: str = Field(..., description="Parent document UUID")
     workspace_id: str = Field(..., description="Workspace boundary identifier")
     document_type: str = Field(..., description="Business document classification type")
+    original_filename: str = Field(
+        default="Unnamed Document", description="Original uploaded filename"
+    )
     embedding_model: str = Field(..., description="Name/identifier of the embedding provider model used")
     total_chunks_processed: int = Field(..., description="Total count of text chunks converted to vectors")
     vector_dimensions: int = Field(
@@ -54,6 +57,9 @@ class GeneratedDocumentEmbeddings(BaseModel):
 
     document_id: str = Field(..., description="Parent document UUID")
     workspace_id: str = Field(..., description="Workspace boundary identifier")
+    original_filename: str = Field(
+        default="Unnamed Document", description="Original uploaded filename"
+    )
     document_type: str = Field(..., description="Business document classification type")
     embeddings: List[SingleGeneratedEmbedding] = Field(
         default_factory=list, description="Collection of generated chunk vectors"

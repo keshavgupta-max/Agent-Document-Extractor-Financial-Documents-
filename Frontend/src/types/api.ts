@@ -30,6 +30,7 @@ export interface DocumentSummary {
   workspace_id: string;
   document_type: DocumentType;
   total_chunks: number;
+  original_filename?: string;
 }
 
 export interface WorkspaceDocumentsResponse {

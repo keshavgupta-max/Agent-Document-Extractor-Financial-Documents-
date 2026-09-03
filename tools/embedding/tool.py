@@ -35,6 +35,9 @@ class EmbeddingTool(BaseTool):
             result = service.generate_embeddings(input_data)
 
             doc_id = result.document_id
+            orig_name = state.metadata.get(f"filename_{doc_id}", "Unnamed Document")
+            result.original_filename = orig_name
+            result.metadata.original_filename = orig_name
             state.metadata[f"embeddings_generated_{doc_id}"] = True
             state.metadata[f"vector_count_{doc_id}"] = len(result.embeddings)
 

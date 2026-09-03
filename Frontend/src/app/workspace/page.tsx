@@ -107,7 +107,7 @@ export default function WorkspaceEntryPage() {
                   if (errorMessage) setErrorMessage(null);
                 }}
                 placeholder="e.g. ws_default"
-                error={errorMessage || undefined}
+                error={Boolean(errorMessage)}
                 autoComplete="off"
               />
             </div>

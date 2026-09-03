@@ -19,6 +19,7 @@ from tools.vector_storage.constants import (
     META_KEY_EMBEDDING_MODEL,
     META_KEY_VECTOR_DIMENSIONS,
     META_KEY_WORKSPACE_ID,
+    META_KEY_ORIGINAL_FILENAME,
 )
 from tools.vector_storage.exceptions import (
     InvalidVectorDataError,
@@ -120,6 +121,7 @@ class VectorStorageService:
                     META_KEY_WORKSPACE_ID: workspace_id,
                     META_KEY_DOCUMENT_ID: doc_id,
                     META_KEY_DOCUMENT_TYPE: doc_type,
+                    META_KEY_ORIGINAL_FILENAME: getattr(gen_embeddings, "original_filename", "Unnamed Document") or "Unnamed Document",
                     META_KEY_CHUNK_ID: chunk_id,
                     META_KEY_CHUNK_INDEX: emb.chunk_index,
                     META_KEY_EMBEDDING_MODEL: meta_info.embedding_model,
@@ -261,3 +263,44 @@ class VectorStorageService:
                     f"Vector dimension mismatch for chunk '{chunk_id}': "
                     f"expected {expected_dim}, got {len(emb.vector)}."
                 )
+
+    # ==============================================================================
+# 1. tools/vector_storage/service.py
+# ==============================================================================
+# Adding method to VectorStorageService:
+
+    def delete_document_vectors(self, workspace_id: str, document_id: str) -> int:
+        """Deletes all vector chunks belonging strictly to a workspace_id and document_id.
+        Returns the count of deleted chunks.
+        """
+        clean_ws = workspace_id.strip()
+        clean_doc = document_id.strip()
+        if not clean_ws or not clean_doc:
+            return 0
+
+        try:
+            client = self._get_client()
+            try:
+                collection = client.get_collection(name=self._collection_name)
+            except Exception:
+                return 0
+
+            where_filter = {
+                "$and": [
+                    {META_KEY_WORKSPACE_ID: clean_ws},
+                    {META_KEY_DOCUMENT_ID: clean_doc},
+                ]
+            }
+
+            records = collection.get(where=where_filter, include=[])
+            record_ids = records.get("ids") or []
+
+            if not record_ids:
+                return 0
+
+            collection.delete(ids=record_ids)
+            logger.info("Deleted %d vector chunks for doc_id '%s' in workspace '%s'", len(record_ids), clean_doc, clean_ws)
+            return len(record_ids)
+        except Exception as exc:
+            logger.error("Failed to delete vectors for document '%s' in workspace '%s': %s", clean_doc, clean_ws, str(exc), exc_info=True)
+            raise VectorStorageOperationError(f"Failed to delete document vectors: {str(exc)}") from exc

@@ -1,7 +1,7 @@
 """Query Service executing grounded AI question-answering over retrieved vector context."""
-
+import re
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional,Dict
 from google import genai
 from google.genai import types
 
@@ -129,7 +129,7 @@ class QueryService:
 
             # 3. Construct prompt with prompt-injection defense boundary
             t_ctx_start = time.perf_counter()
-            context_block, source_chunks = self._format_retrieved_context(
+            context_block, source_chunks, id_to_filename = self._format_retrieved_context(
                 retrieval_result.retrieved_chunks
             )
             context_construction_ms = (time.perf_counter() - t_ctx_start) * 1000.0
@@ -149,10 +149,14 @@ class QueryService:
                 )
             else:
                 t_gen_start = time.perf_counter()
-                ai_answer = self._call_ai_provider(
+                raw_ai_answer = self._call_ai_provider(
                     user_query=user_query,
                     context_block=context_block,
                     model_name=target_model,
+                )
+                ai_answer = self._replace_attribution_patterns(
+                    raw_ai_answer,
+                    id_to_filename,
                 )
                 generation_ms = (time.perf_counter() - t_gen_start) * 1000.0
 
@@ -223,10 +227,37 @@ class QueryService:
                 f"Query length ({len(input_data.query.strip())}) exceeds maximum limit ({MAX_QUERY_LENGTH})."
             )
 
-    def _format_retrieved_context(self, chunks: List[Any]) -> tuple[str, List[QuerySourceChunk]]:
-        """Formats retrieved chunks into a secure context payload."""
+    def _replace_attribution_patterns(
+        self,
+        answer: str,
+        id_to_filename: Dict[str, str],
+    ) -> str:
+        """Deterministically replaces explicit Document ID attribution patterns with human-readable filenames."""
+        if not answer:
+            return answer
+
+        sanitized_answer = answer
+        for doc_id, filename in id_to_filename.items():
+            if not filename or filename == doc_id:
+                continue
+
+            pattern = rf"(?i)\bDocument\s+ID[:\s]+{re.escape(doc_id)}\b"
+            sanitized_answer = re.sub(
+                pattern,
+                f"Document: {filename}",
+                sanitized_answer,
+            )
+
+        return sanitized_answer
+
+
+    def _format_retrieved_context(
+        self, chunks: List[Any]
+    ) -> tuple[str, List[QuerySourceChunk], Dict[str, str]]:
+        """Formats retrieved chunks into a secure context payload, sanitizing known doc_id patterns for prompt context only."""
         formatted_blocks: List[str] = []
         sources: List[QuerySourceChunk] = []
+        id_to_filename: Dict[str, str] = {}
 
         for idx, chunk in enumerate(chunks, start=1):
             source_item = QuerySourceChunk(
@@ -240,17 +271,37 @@ class QueryService:
             )
             sources.append(source_item)
 
+            original_filename = None
+
+            if isinstance(chunk.metadata, dict):
+                original_filename = chunk.metadata.get("original_filename")
+
+            if not original_filename:
+                original_filename = getattr(chunk.metadata, "original_filename", None)
+
+            if not original_filename:
+                original_filename = getattr(chunk, "original_filename", None)
+
+            if not original_filename:
+                original_filename = chunk.document_id
+
+            id_to_filename[chunk.document_id] = original_filename
+
+            # Sanitize literal doc_id references inside chunk text for prompt context only
+            raw_content = chunk.text_content.strip()
+            prompt_content = raw_content.replace(chunk.document_id, original_filename)
+
             block = (
                 f"--- BEGIN SOURCE EXCERPT #{idx} ---\n"
-                f"Document ID: {chunk.document_id}\n"
+                f"Document: {original_filename}\n"
                 f"Document Type: {chunk.metadata.document_type}\n"
-                f"Content:\n{chunk.text_content.strip()}\n"
+                f"Content:\n{prompt_content}\n"
                 f"--- END SOURCE EXCERPT #{idx} ---"
             )
             formatted_blocks.append(block)
 
         unified_context = "\n\n".join(formatted_blocks)
-        return unified_context, sources
+        return unified_context, sources, id_to_filename
 
     def _call_ai_provider(self, user_query: str, context_block: str, model_name: str) -> str:
         """Invokes Google GenAI API with strict system instructions and context separation."""

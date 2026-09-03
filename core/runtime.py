@@ -204,6 +204,8 @@ class AgentRuntime:
             )
 
             document_id = data_dict.get("document_id")
+            if document_id:
+                state.metadata[f"filename_{document_id}"] = payload.original_filename
 
             # Canonical storage path is provided by UploadTool after persisting
             file_path = data_dict.get("storage_path")
@@ -217,12 +219,6 @@ class AgentRuntime:
                     document_id,
                     "upload_document",
                 )
-
-            mime_type = data_dict.get("mime_type") or mime_type
-            file_extension = (
-                data_dict.get("file_extension")
-                or Path(file_path).suffix.lower()
-            )
 
             # ==============================================================
             # Stage 2: Parser

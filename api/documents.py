@@ -16,6 +16,7 @@ from tools.vector_storage.constants import (
     META_KEY_DOCUMENT_ID,
     META_KEY_DOCUMENT_TYPE,
     META_KEY_WORKSPACE_ID,
+    META_KEY_ORIGINAL_FILENAME,
 )
 from tools.vector_storage.service import VectorStorageService
 
@@ -36,6 +37,7 @@ class DocumentSummary(BaseModel):
     document_id: str = Field(..., description="Document unique identifier")
     workspace_id: str = Field(..., description="Workspace identifier")
     document_type: str = Field(default="UNKNOWN", description="Classified document type")
+    original_filename: str = Field(default="Unnamed Document", description="Original uploaded filename")
     total_chunks: int = Field(default=0, description="Total number of vector chunks stored")
 
 
@@ -216,12 +218,14 @@ async def list_workspace_documents(
                 continue
 
             doc_type = str(meta.get(META_KEY_DOCUMENT_TYPE, "UNKNOWN")).strip()
+            orig_filename = str(meta.get(META_KEY_ORIGINAL_FILENAME, "Unnamed Document")).strip() or "Unnamed Document"
 
             if doc_id not in doc_map:
                 doc_map[doc_id] = {
                     "document_id": doc_id,
                     "workspace_id": clean_workspace_id,
                     "document_type": doc_type,
+                    "original_filename": orig_filename,
                     "total_chunks": 1,
                 }
             else:
@@ -242,4 +246,71 @@ async def list_workspace_documents(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing workspace documents.",
+        )
+    # ==============================================================================
+# 2. api/documents.py
+# ==============================================================================
+# Adding Response Model and DELETE route:
+
+class DocumentDeleteResponse(BaseModel):
+    """Response payload for document deletion."""
+    success: bool = Field(default=True, description="Deletion success flag")
+    document_id: str = Field(..., description="Deleted document unique identifier")
+    workspace_id: str = Field(..., description="Workspace identifier")
+    deleted_chunks: int = Field(..., description="Total count of vector chunks deleted")
+    message: str = Field(default="Document successfully deleted", description="Status message")
+
+
+@router.delete(
+    "/{document_id}",
+    response_model=DocumentDeleteResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete a document and its indexed vectors from a workspace",
+)
+async def delete_workspace_document(
+    document_id: str,
+    workspace_id: str = Query(..., min_length=1, description="Workspace identifier owning the document"),
+) -> DocumentDeleteResponse:
+    """Deletes all vector embeddings associated with the specified document and workspace."""
+    clean_workspace_id = workspace_id.strip()
+    clean_doc_id = document_id.strip()
+
+    if not clean_workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="workspace_id query parameter cannot be empty or whitespace.",
+        )
+    if not clean_doc_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="document_id path parameter cannot be empty or whitespace.",
+        )
+
+    try:
+        storage_svc = VectorStorageService()
+        deleted_count = storage_svc.delete_document_vectors(
+            workspace_id=clean_workspace_id,
+            document_id=clean_doc_id,
+        )
+
+        if deleted_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found in the specified workspace.",
+            )
+
+        return DocumentDeleteResponse(
+            success=True,
+            document_id=clean_doc_id,
+            workspace_id=clean_workspace_id,
+            deleted_chunks=deleted_count,
+            message=f"Document '{clean_doc_id}' and {deleted_count} chunk(s) successfully deleted.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to delete document '%s' in workspace '%s': %s", clean_doc_id, clean_workspace_id, str(exc), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting the document.",
         )

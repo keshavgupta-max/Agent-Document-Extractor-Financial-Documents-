@@ -137,3 +137,5 @@ yarn-debug.log*
 yarn-error.log*
 .env*.local
 .env
+.env.example
+*.tsbuildinfo

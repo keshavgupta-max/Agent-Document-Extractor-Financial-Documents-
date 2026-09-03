@@ -202,7 +202,7 @@ export default function UploadPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto pb-16">
+    <div className="space-y-6 w-full max-w-6xl mx-auto pb-16">
       {/* Top Header */}
       <div className="border-b border-border pb-4">
         <h1 className="text-xl font-bold tracking-tight text-typography-primary">

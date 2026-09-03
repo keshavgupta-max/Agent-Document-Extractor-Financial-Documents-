@@ -57,7 +57,10 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* Main Content Area */}
       <div className="flex flex-1 flex-col lg:pl-64">
-        <Header onOpenMobileMenu={() => setMobileMenuOpen(true)} />
+        <Header
+          onToggleSidebar={() => setMobileMenuOpen(true)}
+          isSidebarOpen={mobileMenuOpen}
+        />
         <main className="flex-1 p-4 lg:p-8 max-w-7xl mx-auto w-full">
           {children}
         </main>

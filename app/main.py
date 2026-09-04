@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict
 
 from fastapi import FastAPI, Request, status
+import fastapi 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -97,6 +98,7 @@ async def health_check() -> Dict[str, str]:
 async def root():
     return {
         "status": "running",
+        "fastapi_version": fastapi.__version__,
         "health_route_registered": any(
             getattr(route, "path", None) == "/health"
             for route in app.routes

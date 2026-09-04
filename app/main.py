@@ -3,8 +3,7 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict
 
-from fastapi import FastAPI, Request, status
-import fastapi 
+from fastapi import FastAPI, Request, status 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -94,25 +93,3 @@ async def health_check() -> Dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy"}
 
-@app.get("/")
-async def root():
-    return {
-        "status": "running",
-        "fastapi_version": fastapi.__version__,
-        "health_route_registered": any(
-            getattr(route, "path", None) == "/health"
-            for route in app.routes
-        ),
-        "routes": [
-            getattr(route, "path", None)
-            for route in app.routes
-            if getattr(route, "path", None)
-        ],
-    }
-
-for route in app.routes:
-    logger.info(
-        "REGISTERED ROUTE: %s %s",
-        getattr(route, "methods", None),
-        getattr(route, "path", None),
-    )

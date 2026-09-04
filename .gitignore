@@ -59,12 +59,7 @@ logs/
 # Local Storage / Runtime Data
 # ============================================================
 
-storage/*
-database/*
-
-# Keep directory structure in Git
-!storage/.gitkeep
-!database/.gitkeep
+# Runtime data is stored under data/ and ignored below.
 
 # ============================================================
 # Project Generated / Temporary Data

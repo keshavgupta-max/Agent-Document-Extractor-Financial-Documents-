@@ -92,3 +92,10 @@ async def global_unhandled_exception_handler(
 async def health_check() -> Dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy"}
+
+for route in app.routes:
+    logger.info(
+        "REGISTERED ROUTE: %s %s",
+        getattr(route, "methods", None),
+        getattr(route, "path", None),
+    )
